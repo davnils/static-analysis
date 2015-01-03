@@ -1,0 +1,4 @@
+movi r0 1
+movi r1 0
+movi r2 -1
+add r0 r1 r1
