@@ -41,7 +41,7 @@ instance JoinSemiLattice SignLattice
   join NonZero NonPos   = Any
   join NonZero NonZero  = NonZero
 
-  join a1 a2        = join a2 a1
+  join a1 a2            = join a2 a1
 
 instance BoundedJoinSemiLattice SignLattice
   where
@@ -76,3 +76,9 @@ instance InterpreterLattice SignLattice where
     | n < 0  = Neg
     | n == 0  = Zero
     | n > 0  = Pos
+
+  testZero Zero    = (True, False)
+  testZero NonZero = (False, True)
+  testZero Pos     = (False, True)
+  testZero Neg     = (False, True)
+  testZero other   = (True, True)

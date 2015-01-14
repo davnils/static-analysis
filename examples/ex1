@@ -1,4 +1,5 @@
+movi r0 0
+movi r1 1
+jmpz r0 5
 movi r0 1
-movi r1 0
-movi r2 -1
-add r0 r1 r1
+mov r0 r0

@@ -17,6 +17,8 @@ type ControlPoint = Int
 
 data AST t
   = AddF t t t
+  | JmpF ControlPoint
+  | JmpZF t ControlPoint
   | MovF t t
   | MovIF t Block
   | RegLabelF Int
@@ -24,8 +26,10 @@ data AST t
   | SeqEndF
   deriving (Functor, Foldable, Show, Traversable)
 
-pattern RegLabel      t        = Fix (RegLabelF t)
+pattern RegLabel      t1       = Fix (RegLabelF t1)
 pattern Add           t1 t2 t3 = Fix (AddF t1 t2 t3)
+pattern Jmp           t1       = Fix (JmpF t1)
+pattern JmpZ          t1 t2    = Fix (JmpZF t1 t2)
 pattern Mov           t1 t2    = Fix (MovF t1 t2)
 pattern MovI          t1 t2    = Fix (MovIF t1 t2)
 pattern Seq           t1 t2 t3 = Fix (SeqF t1 t2 t3)
