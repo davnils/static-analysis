@@ -1,3 +1,16 @@
+---
+--
+-- How should stack allocations be handled?
+--
+-- the value of sp is clearly symbolic.
+--
+-- is it enough to simply have a dedicated sp in regsters?
+-- should be. but stack-relative access can't be validated (in sign).
+--
+-- In interval domain it's better. can validate that the index
+-- is a subinterval of the available stack (i.e. higher than the stack).
+---
+
 {-# LANGUAGE
     PatternSynonyms
   #-}
@@ -19,24 +32,31 @@ import           Data.IntMap ((!))
 import           Prelude hiding (break)
 import           Types
 
-type Register v        = IM.IntMap v
--- TOOD: memory should be modeled as stack and heap
-type Memory v          = IM.IntMap v
-type ConfState v       = (Register v, Memory v)
-type InstrMap          = IML.IntMap Program
+data ValueType
+  = SymbolicWord
+  | StackAddress
+  -- | HeapAddress
+  deriving (Eq, Ord, Show)
 
-type InterpretState v = IM.IntMap (ConfState v)
-type InterpM v = S.StateT (ConfState v) (S.StateT (InterpretState v) (R.ReaderT InstrMap IO))
+type Value l      = (ValueType, l)
+type Registers l  = (l, IM.IntMap (Value l)) -- sp and counted ([r0, ..])
+type Stack l      = IM.IntMap (Value l)
+type ConfState l  = (Registers l, Stack l)
+type InstrMap     = IML.IntMap Program
+
+type InterpretState l = IM.IntMap (ConfState l)
+type InterpM l        = S.StateT (ConfState l)
+                                 (S.StateT (InterpretState l)
+                                           (R.ReaderT InstrMap IO)
+                                 )
 
 interpretOverLattice
-  :: InterpreterLattice v
-  => v
-  -> Program
-  -> IO (InterpretState v)
+  :: InterpreterLattice l
+  => Program
+  -> IO (InterpretState l)
 
-interpretOverLattice defValue prog = do
-  -- TODO: integrate defValue for uninit reads
-  let reg = IM.empty
+interpretOverLattice prog = do
+  let reg = (concretize 0, IM.empty)
       mem = IM.empty
       states = IM.empty
 
@@ -67,15 +87,13 @@ renderState st = putStrLn . unlines $ map go $ IM.toList st
      "mem: " ++ show mem
     ]
 
--------------------------------------------------------------
--- åtto ke tje ne yo
--- nan kunch-an-na
--- pi gå nä yo
---
+-- nan kunch-an-na (fine)
+-- pi gå nä yo (tired)
+
 interpretCodePoint
-  :: InterpreterLattice v
+  :: InterpreterLattice l
   => ControlPoint
-  -> InterpM v ()
+  -> InterpM l ()
 
 interpretCodePoint point = do
   instr <- IML.lookup point <$> lift (lift R.ask)
@@ -99,11 +117,17 @@ break    act = act >> return False
 -------------------------------------------------------------
 
 interpret
-  :: InterpreterLattice v
+  :: InterpreterLattice l
   => Program
-  -> InterpM v Bool
+  -> InterpM l Bool
 
-interpret (Add t1 t2 t3) = continue $ liftM2 add (readR t1) (readR t2) >>= writeR t3
+-- TODO: should implement Add
+--
+-- TODO: add stack allocation.
+--       i.e. add esp, 2 results in allocS 2; add esp 2
+--       where the initial value in esp is of type esp
+
+interpret (Fetch src dst) = continue $ readM src >>= writeR dst
 
 interpret (Jmp point) = break $ interpretCodePoint point
 
@@ -112,23 +136,25 @@ interpret (Jmp point) = break $ interpretCodePoint point
 -- with the corresponding states in order to reach higher precision.
 -- this may however result in more configurations being explored.
 interpret (JmpZ t1 point) = do
-  cond <- readR t1
+  (_, cond) <- readR t1
   let (b1, b2) = testZero cond
   when b1 $ interpretCodePoint point
   if b2 then return True else return False
 
 interpret (Mov t1 t2) = continue $ readR t1 >>= writeR t2
 
-interpret (MovI t1 n) = continue $ writeR t1 (abstract n)
+interpret (MovI t1 n) = continue $ writeR t1 (SymbolicWord, abstract n)
+
+interpret (Write val dst) = continue $ writeM val dst
 
 interpret _ = return True
 
 merge
-  :: InterpreterLattice v
+  :: InterpreterLattice l
   => ControlPoint
-  -> ConfState v
-  -> InterpretState v
-  -> InterpM v Bool
+  -> ConfState l
+  -> InterpretState l
+  -> InterpM l Bool
 
 merge point updated entries = case membership of
   Nothing       -> putState updated >> return True
@@ -141,20 +167,85 @@ merge point updated entries = case membership of
   membership = IM.lookup point entries
   putState v = lift . S.put $ IM.insert point v entries
   join' (r1, m1) (r2, m2) = (joinMaps r1 r2, joinMaps m1 m2)
-  joinMaps = IM.unionWith join
+  joinMaps = IM.unionWith unionOp
+  unionOp (kind1, val1) (kind2, val2) = (refineTypes kind1 kind2, join val1 val2)
+  refineTypes t1 t2 = if t1 == t2 then t1 else (error "Invalid type refinement")
   -- note that this assumes same set of registers and memory range for this ctrl point
 
 -------------------------------------------------------------
 
 readR
   :: Program
-  -> InterpM v v
+  -> InterpM l (Value l)
 
 readR (RegLabel reg) = fmap ((! reg) . fst) S.get
 
 writeR
   :: Program
-  -> v
-  -> InterpM v ()
+  -> (Value l)
+  -> InterpM l ()
 
 writeR (RegLabel n) val = S.modify $ \(reg, mem) -> (IM.insert n val reg, mem)
+
+assertStackAddress
+  :: Monad m
+  => ValueType
+  -> m ()
+assertStackAddress (StackAddress) = return ()
+assertStackAddress  _             = return $ error "Memory reference to non-memory value"
+
+readM
+  :: InterpreterLattice l
+  => Program
+  -> InterpM l (Value l)
+
+readM = fetchMemoryAddress
+
+writeM
+  :: InterpreterLattice l
+  => Program
+  -> Program
+  -> InterpM l ()
+
+writeM valReg dstReg = do
+  (kind, addr) <- fetchMemoryAddress dstReg
+  val <- readR valReg
+  (regs, stack) <- S.get
+
+  assertStackAddress kind
+
+  case concretize addr of
+    [n] -> S.put $ (regs, IML.insert n val stack)
+    _ -> error "TBD: implement when fetchMemoryAddress is extended"
+
+fetchMemoryAddress
+  :: InterpreterLattice l
+  => Program
+  -> InterpM l (Value l)
+fetchMemoryAddress addrReg = do
+  (kind, addr) <- readR addrReg 
+  assertStackAddress kind
+  process addr
+
+  where
+  process addr = case concretize addr of
+    [n] -> do
+      stack <- fmap snd S.get
+      case IML.lookup n stack of
+            Just val -> return val
+            _        -> return $ error "Out of range memory access detected TODO"
+    _   -> return $ error "Insufficient precision in memory operation"
+    -- TODO: this can be refined by taking the union of all memory locations in range
+    --       i.e. optionally returning a list of addresses
+
+-------------------------------------------------------------
+
+evalType
+  :: ValueType
+  -> ValueType
+  -> ValueType
+
+evalType StackAddress StackAddress = SymbolicWord
+evalType StackAddress SymbolicWord = StackAddress
+evalType SymbolicWord StackAddress = StackAddress
+evalType SymbolicWord SymbolicWord = SymbolicWord 

@@ -9,3 +9,4 @@ class (Eq t, JoinSemiLattice t) => InterpreterLattice t
   add :: t -> t -> t
   abstract :: Block -> t
   testZero :: t -> (Bool, Bool) -- [t] for higher precision
+  concretize :: t -> [Block]

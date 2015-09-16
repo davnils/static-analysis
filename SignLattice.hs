@@ -82,3 +82,6 @@ instance InterpreterLattice SignLattice where
   testZero Pos     = (False, True)
   testZero Neg     = (False, True)
   testZero other   = (True, True)
+
+  concretize Zero = [0]
+  concretize _    = [undefined, undefined]
