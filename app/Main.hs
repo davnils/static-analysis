@@ -24,7 +24,7 @@ parse = fix 1 . map go . map words . lines
 run :: String -> IO ()
 run file = readFile file >>= interpretOverLattice . parse >>= renderState . overSignLattice
   where
-  overSignLattice :: InterpretState (Value SignLattice) -> InterpretState (Value SignLattice)
+  overSignLattice :: InterpretState SignLattice -> InterpretState SignLattice
   overSignLattice = id
 
 main :: IO ()

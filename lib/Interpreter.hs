@@ -1,18 +1,6 @@
----
---
--- How should stack allocations be handled?
---
--- the value of sp is clearly symbolic.
---
--- is it enough to simply have a dedicated sp in regsters?
--- should be. but stack-relative access can't be validated (in sign).
---
--- In interval domain it's better. can validate that the index
--- is a subinterval of the available stack (i.e. higher than the stack).
----
-
 {-# LANGUAGE
-    PatternSynonyms
+    PatternSynonyms,
+    TemplateHaskell
   #-}
 
 module Interpreter where
@@ -24,6 +12,7 @@ import           Control.Monad (liftM2, when, unless)
 import           Control.Monad.Trans (lift, liftIO, MonadIO)
 import qualified Control.Monad.Trans.Reader as R
 import qualified Control.Monad.Trans.State as S
+import           Control.Lens
 import           Data.Int (Int8)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.IntMap.Strict as IM
@@ -32,22 +21,20 @@ import           Data.IntMap ((!))
 import           Prelude hiding (break)
 import           Types
 
-data ValueType
-  = SymbolicWord
-  | StackAddress
-  -- | HeapAddress
-  deriving (Eq, Ord, Show)
 
-type Value l      = (ValueType, l)
-type Registers l  = (l, IM.IntMap (Value l)) -- sp and counted ([r0, ..])
-type Stack l      = IM.IntMap (Value l)
-type ConfState l  = (Registers l, Stack l)
-type InstrMap     = IML.IntMap Program
+data Machine l
+  = Machine
+  {
+    _memory    :: IM.IntMap l,
+    _registers :: (l, IM.IntMap l) -- sp and counted ([r0, ..])
+  }
+makeLenses ''Machine
 
-type InterpretState l = IM.IntMap (ConfState l)
-type InterpM l        = S.StateT (ConfState l)
+type InstructionMap   = IML.IntMap Program
+type InterpretState l = IM.IntMap (Machine l)
+type InterpM l        = S.StateT (Machine l)
                                  (S.StateT (InterpretState l)
-                                           (R.ReaderT InstrMap IO)
+                                           (R.ReaderT InstructionMap IO)
                                  )
 
 interpretOverLattice
@@ -56,18 +43,18 @@ interpretOverLattice
   -> IO (InterpretState l)
 
 interpretOverLattice prog = do
-  let reg = (concretize 0, IM.empty)
-      mem = IM.empty
+  let regs   = (concretize 0, IM.empty)
+      mem    = IM.empty
       states = IM.empty
 
-      localState = S.execStateT (interpretCodePoint 1) (reg, mem)
+      localState = S.execStateT (interpretCodePoint 1) (Machine regs mem)
       search     = S.execStateT localState states
 
   R.runReaderT search (buildMapRepr prog)
 
 buildMapRepr
   :: Program
-  -> InstrMap
+  -> InstructionMap
 
 buildMapRepr = go IML.empty
   where
@@ -86,9 +73,6 @@ renderState st = putStrLn . unlines $ map go $ IM.toList st
      "reg: " ++ show reg,
      "mem: " ++ show mem
     ]
-
--- nan kunch-an-na (fine)
--- pi gå nä yo (tired)
 
 interpretCodePoint
   :: InterpreterLattice l
@@ -121,11 +105,10 @@ interpret
   => Program
   -> InterpM l Bool
 
--- TODO: should implement Add
---
--- TODO: add stack allocation.
---       i.e. add esp, 2 results in allocS 2; add esp 2
---       where the initial value in esp is of type esp
+interpret (Add src1 src2 dst) = continue $ do
+  val1 <- readR src1
+  val2 <- readR src2
+  writeR dst (add val1 val2)
 
 interpret (Fetch src dst) = continue $ readM src >>= writeR dst
 
@@ -152,7 +135,7 @@ interpret _ = return True
 merge
   :: InterpreterLattice l
   => ControlPoint
-  -> ConfState l
+  -> Machine l
   -> InterpretState l
   -> InterpM l Bool
 
@@ -166,40 +149,31 @@ merge point updated entries = case membership of
   where
   membership = IM.lookup point entries
   putState v = lift . S.put $ IM.insert point v entries
-  join' (r1, m1) (r2, m2) = (joinMaps r1 r2, joinMaps m1 m2)
+  join' (Machine r1 m1) (Machine r2 m2) = (joinMaps r1 r2, joinMaps m1 m2)
   joinMaps = IM.unionWith unionOp
-  unionOp (kind1, val1) (kind2, val2) = (refineTypes kind1 kind2, join val1 val2)
-  refineTypes t1 t2 = if t1 == t2 then t1 else (error "Invalid type refinement")
-  -- note that this assumes same set of registers and memory range for this ctrl point
+  unionOp val1 val2 = join val1 val2
 
 -------------------------------------------------------------
 
 readR
   :: Program
-  -> InterpM l (Value l)
+  -> InterpM l l
 
-readR (RegLabel reg) = fmap ((! reg) . fst) S.get
+readR (RegLabel reg) = fmap ((! reg) . view registers) S.get
 
 writeR
   :: Program
-  -> (Value l)
+  -> l
   -> InterpM l ()
 
-writeR (RegLabel n) val = S.modify $ \(reg, mem) -> (IM.insert n val reg, mem)
+writeR (RegLabel n) val = S.modify $ over registers (IM.insert n val)
 
-assertStackAddress
-  :: Monad m
-  => ValueType
-  -> m ()
-assertStackAddress (StackAddress) = return ()
-assertStackAddress  _             = return $ error "Memory reference to non-memory value"
-
-readM
+{-readM
   :: InterpreterLattice l
   => Program
-  -> InterpM l (Value l)
+  -> InterpM l l
 
-readM = fetchMemoryAddress
+readM = fetchFromStackAddress
 
 writeM
   :: InterpreterLattice l
@@ -208,23 +182,20 @@ writeM
   -> InterpM l ()
 
 writeM valReg dstReg = do
-  (kind, addr) <- fetchMemoryAddress dstReg
+  addr <- fetchFromAddress dstReg
   val <- readR valReg
   (regs, stack) <- S.get
-
-  assertStackAddress kind
 
   case concretize addr of
     [n] -> S.put $ (regs, IML.insert n val stack)
     _ -> error "TBD: implement when fetchMemoryAddress is extended"
 
-fetchMemoryAddress
+fetchFromAddress
   :: InterpreterLattice l
   => Program
-  -> InterpM l (Value l)
-fetchMemoryAddress addrReg = do
-  (kind, addr) <- readR addrReg 
-  assertStackAddress kind
+  -> InterpM l l
+fetchFromAddress addrReg = do
+  addr <- readR addrReg 
   process addr
 
   where
@@ -237,15 +208,4 @@ fetchMemoryAddress addrReg = do
     _   -> return $ error "Insufficient precision in memory operation"
     -- TODO: this can be refined by taking the union of all memory locations in range
     --       i.e. optionally returning a list of addresses
-
--------------------------------------------------------------
-
-evalType
-  :: ValueType
-  -> ValueType
-  -> ValueType
-
-evalType StackAddress StackAddress = SymbolicWord
-evalType StackAddress SymbolicWord = StackAddress
-evalType SymbolicWord StackAddress = StackAddress
-evalType SymbolicWord SymbolicWord = SymbolicWord 
+-}

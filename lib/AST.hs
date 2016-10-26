@@ -20,6 +20,8 @@ data RegisterType
   | Other Int
   deriving (Show)
 
+-- add push/pop
+
 data AST t
   = AddF t t t
   | FetchF t t

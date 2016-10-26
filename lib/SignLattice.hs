@@ -16,32 +16,32 @@ data SignLattice
 
 instance JoinSemiLattice SignLattice
   where
-  join Any _            = Any
-  join None other       = other
+   Any \/ _            = Any
+   None \/ other       = other
 
-  join Pos NonZero      = NonZero
-  join Pos NonNeg       = NonNeg
-  join Pos NonPos       = Any
-  join Pos Zero         = NonNeg
-  join Pos Neg          = NonZero
-  join Pos Pos          = Pos
+   Pos \/ NonZero      = NonZero
+   Pos \/ NonNeg       = NonNeg
+   Pos \/ NonPos       = Any
+   Pos \/ Zero         = NonNeg
+   Pos \/ Neg          = NonZero
+   Pos \/ Pos          = Pos
 
-  join Neg NonPos       = NonPos
-  join Neg NonZero      = NonZero
-  join Neg NonNeg       = Any
-  join Neg Zero         = NonPos
-  join Neg Neg          = Neg
+   Neg \/ NonPos       = NonPos
+   Neg \/ NonZero      = NonZero
+   Neg \/ NonNeg       = Any
+   Neg \/ Zero         = NonPos
+   Neg \/ Neg          = Neg
 
-  join Zero NonPos      = NonPos
-  join Zero NonZero     = Any
-  join Zero NonNeg      = NonNeg
-  join Zero Zero        = Zero
+   Zero \/ NonPos      = NonPos
+   Zero \/ NonZero     = Any
+   Zero \/ NonNeg      = NonNeg
+   Zero \/ Zero        = Zero
 
-  join NonZero NonNeg   = Any
-  join NonZero NonPos   = Any
-  join NonZero NonZero  = NonZero
+   NonZero \/ NonNeg   = Any
+   NonZero \/ NonPos   = Any
+   NonZero \/ NonZero  = NonZero
 
-  join a1 a2            = join a2 a1
+   a1 \/ a2            = a2 \/ a1
 
 instance BoundedJoinSemiLattice SignLattice
   where
@@ -77,6 +77,7 @@ instance InterpreterLattice SignLattice where
     | n == 0  = Zero
     | n > 0  = Pos
 
+  -- | Returns (should follow branch, should not follow branch)
   testZero Zero    = (True, False)
   testZero NonZero = (False, True)
   testZero Pos     = (False, True)
